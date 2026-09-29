@@ -1,0 +1,38 @@
+{% extends request.ajax ? "layout_blank.html.twig" : "layout_default.html.twig" %}
+
+{% block meta_title %}{{ 'Two-Factor Authentication'|trans }}{% endblock %}
+{% block page_header %}{{ 'Two-Factor Authentication'|trans }}{% endblock %}
+{% block breadcrumb %}
+    <li class="breadcrumb-item"><a href="{{ 'client/profile'|url }}">{{ 'Profile'|trans }}</a></li>
+    <li class="breadcrumb-item active" aria-current="page">{{ 'Two-Factor Authentication'|trans }}</li>
+{% endblock %}
+
+{% block body_class %}client-2fa{% endblock %}
+
+{% block content %}
+    <div class="row">
+        <div class="col-lg-8">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title mb-1">{{ 'Two-Factor Authentication'|trans }}</h5>
+                    <p class="card-text fs-7 text-muted">{{ 'Add a second step to your login with an authenticator app.'|trans }}</p>
+                    <div id="tajhost2fa-app"><div class="spinner-border" role="status"></div></div>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endblock %}
+
+{% block js %}
+    {{ parent() }}
+    <script src="{{ 'qrcode.min.js'|mod_asset_url('tajhost2fa') }}"></script>
+    <script src="{{ 'tajhost2fa.js'|mod_asset_url('tajhost2fa') }}"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            window.TajHost2FA.mount(document.getElementById('tajhost2fa-app'), {
+                role: 'client',
+                i18n: {% include 'mod_tajhost2fa_i18n.html.twig' %}
+            });
+        });
+    </script>
+{% endblock %}

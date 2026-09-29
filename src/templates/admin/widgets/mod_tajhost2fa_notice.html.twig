@@ -1,0 +1,22 @@
+{# TAJHOST 2FA: forces staff members without 2FA to the setup page when 2FA is mandatory. #}
+{% if admin %}
+    {% set tfa = admin.tajhost2fa_status() %}
+    {% if tfa.required and not tfa.enabled %}
+        {% set setup_url = 'tajhost2fa'|url(area: 'admin') %}
+        <div class="alert alert-danger d-flex align-items-center justify-content-between gap-3" role="alert">
+            <div>
+                <strong>{{ 'Two-factor authentication is required.'|trans }}</strong>
+                {{ 'Set it up now to keep using the admin area.'|trans }}
+            </div>
+            <a class="btn btn-danger" href="{{ setup_url }}">{{ 'Set up 2FA'|trans }}</a>
+        </div>
+        <script>
+            (function () {
+                var target = new URL({{ setup_url|json_encode|raw }}, window.location.href);
+                if (window.location.pathname.replace(/\/+$/, '') !== target.pathname.replace(/\/+$/, '')) {
+                    window.location.replace(target.href);
+                }
+            })();
+        </script>
+    {% endif %}
+{% endif %}

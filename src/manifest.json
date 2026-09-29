@@ -1,0 +1,13 @@
+{
+  "id": "tajhost2fa",
+  "type": "mod",
+  "name": "TAJHOST Two-Factor Authentication",
+  "description": "Adds TOTP two-factor authentication (Google Authenticator, Authy, Microsoft Authenticator, 1Password, etc.) with one-time backup codes to both the admin area and the client area.",
+  "icon_url": "icon.svg",
+  "homepage_url": "https://github.com/TAJ-IT-Solutions-Limited/fossbilling-2fa",
+  "author": "TAJHOST",
+  "author_url": "https://tajhost.com",
+  "license": "Apache 2.0 - https://www.apache.org/licenses/LICENSE-2.0",
+  "version": "1.0.0",
+  "minimum_fossbilling_version": "0.8.3"
+}

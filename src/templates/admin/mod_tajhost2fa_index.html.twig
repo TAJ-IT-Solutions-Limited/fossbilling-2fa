@@ -1,0 +1,172 @@
+{% extends request.ajax ? 'layout_blank.html.twig' : 'layout_default.html.twig' %}
+
+{% block meta_title %}{{ 'Two-Factor Authentication'|trans }}{% endblock %}
+
+{% set active_menu = 'system' %}
+
+{% block breadcrumbs %}
+    <ul class="breadcrumb">
+        <li class="breadcrumb-item">
+            <a href="{{ '/'|url(area: 'admin') }}"><svg class="icon"><use href="#home"/></svg></a>
+        </li>
+        <li class="breadcrumb-item active" aria-current="page">{{ 'Two-Factor Authentication'|trans }}</li>
+    </ul>
+{% endblock %}
+
+{% block content %}
+    {% set can_manage = has_permission('tajhost2fa', 'manage') %}
+
+    <div class="row row-cards">
+        <div class="col-12 {{ can_manage ? 'col-xl-6' : '' }}">
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <h3 class="card-title">{{ 'Your account'|trans }}</h3>
+                        <p class="card-subtitle">{{ 'Protect your staff login with an authenticator app.'|trans }}</p>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div id="tajhost2fa-app"><div class="spinner-border" role="status"></div></div>
+                </div>
+            </div>
+        </div>
+
+        {% if can_manage %}
+            {% set settings = admin.tajhost2fa_settings() %}
+            <div class="col-12 col-xl-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">{{ 'Settings'|trans }}</h3>
+                    </div>
+                    <form method="post" action="{{ 'extension/config_save'|api_url(role: 'admin') }}" {{ fb_api_form({message: 'Configuration Updated'|trans, reload: true}) }}>
+                        <input type="hidden" name="ext" value="mod_tajhost2fa">
+                        <div class="card-body">
+                            <div class="mb-3">
+                                <input type="hidden" name="enforce_admin" value="0">
+                                <label class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" name="enforce_admin" value="1" {% if settings.enforce_admin %}checked{% endif %}>
+                                    <span class="form-check-label">{{ 'Require 2FA for all staff members'|trans }}</span>
+                                </label>
+                                <div class="form-hint">{{ 'Staff members without 2FA are sent to the setup page until they enable it, and cannot turn it off.'|trans }}</div>
+                            </div>
+                            <div class="mb-3">
+                                <input type="hidden" name="allow_clients" value="0">
+                                <label class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" name="allow_clients" value="1" {% if settings.allow_clients %}checked{% endif %}>
+                                    <span class="form-check-label">{{ 'Allow clients to enable 2FA'|trans }}</span>
+                                </label>
+                                <div class="form-hint">{{ 'Clients can turn on 2FA from their dashboard. Turning this off stops asking clients for codes.'|trans }}</div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label" for="tajhost2fa-issuer">{{ 'Name shown in the authenticator app'|trans }}</label>
+                                <input class="form-control" id="tajhost2fa-issuer" type="text" name="issuer" value="{{ settings.issuer }}" maxlength="64">
+                            </div>
+                        </div>
+                        <div class="card-footer text-end">
+                            <button class="btn btn-primary" type="submit">{{ 'Save'|trans }}</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">{{ 'Staff members'|trans }}</h3>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table card-table table-vcenter">
+                            <thead>
+                            <tr>
+                                <th>{{ 'Name'|trans }}</th>
+                                <th>{{ 'Email'|trans }}</th>
+                                <th>{{ '2FA'|trans }}</th>
+                                <th>{{ 'Last used'|trans }}</th>
+                                <th class="w-1"></th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            {% for s in admin.tajhost2fa_staff_overview() %}
+                                <tr>
+                                    <td>{{ s.name }}</td>
+                                    <td>{{ s.email }}</td>
+                                    <td>
+                                        {% if s.enabled %}
+                                            <span class="badge bg-success text-white">{{ 'Enabled'|trans }}</span>
+                                        {% else %}
+                                            <span class="badge bg-danger text-white">{{ 'Not set up'|trans }}</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ s.last_used_at|default('-') }}</td>
+                                    <td>
+                                        {% if s.enabled %}
+                                            <a class="btn btn-sm btn-outline-danger" href="{{ 'tajhost2fa/staff_reset'|api_url(query: {id: s.id}, role: 'admin') }}"
+                                               {{ fb_api_link({modal: {type: 'confirm', title: 'Remove 2FA from this staff member? They will have to set it up again.'|trans}, reload: true}) }}>{{ 'Reset'|trans }}</a>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <h3 class="card-title">{{ 'Clients with 2FA'|trans }}</h3>
+                            <p class="card-subtitle">{{ 'Reset 2FA only after verifying the client’s identity (e.g. a client who lost their phone and backup codes).'|trans }}</p>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table card-table table-vcenter">
+                            <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>{{ 'Name'|trans }}</th>
+                                <th>{{ 'Email'|trans }}</th>
+                                <th>{{ 'Enabled on'|trans }}</th>
+                                <th>{{ 'Last used'|trans }}</th>
+                                <th class="w-1"></th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            {% for c in admin.tajhost2fa_client_list() %}
+                                <tr>
+                                    <td>{{ c.id }}</td>
+                                    <td><a href="{{ 'client/manage'|url(area: 'admin') }}/{{ c.id }}">{{ c.name }}</a></td>
+                                    <td>{{ c.email }}</td>
+                                    <td>{{ c.enabled_at|default('-') }}</td>
+                                    <td>{{ c.last_used_at|default('-') }}</td>
+                                    <td>
+                                        <a class="btn btn-sm btn-outline-danger" href="{{ 'tajhost2fa/client_reset'|api_url(query: {id: c.id}, role: 'admin') }}"
+                                           {{ fb_api_link({modal: {type: 'confirm', title: 'Remove 2FA from this client?'|trans}, reload: true}) }}>{{ 'Reset'|trans }}</a>
+                                    </td>
+                                </tr>
+                            {% else %}
+                                <tr><td colspan="6" class="text-muted text-center">{{ 'No clients have enabled 2FA yet.'|trans }}</td></tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        {% endif %}
+    </div>
+{% endblock %}
+
+{% block js %}
+    {{ parent() }}
+    <script src="{{ 'qrcode.min.js'|mod_asset_url('tajhost2fa') }}"></script>
+    <script src="{{ 'tajhost2fa.js'|mod_asset_url('tajhost2fa') }}"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            window.TajHost2FA.mount(document.getElementById('tajhost2fa-app'), {
+                role: 'admin',
+                i18n: {% include 'mod_tajhost2fa_i18n.html.twig' %}
+            });
+        });
+    </script>
+{% endblock %}

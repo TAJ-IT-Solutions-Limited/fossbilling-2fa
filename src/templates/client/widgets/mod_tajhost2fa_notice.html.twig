@@ -1,0 +1,20 @@
+{# TAJHOST 2FA: suggests enabling 2FA on the client dashboard. #}
+{% if client %}
+    {% set tfa = client.tajhost2fa_status() %}
+    {% if tfa.available and not tfa.enabled %}
+        <div class="card border-warning mb-4">
+            <div class="card-body">
+                <h5 class="card-title mb-1">{{ 'Protect your account'|trans }}</h5>
+                <p class="card-text text-muted mb-3">{{ 'Turn on two-factor authentication so nobody can sign in with just your password.'|trans }}</p>
+                <a class="btn btn-warning" href="{{ 'tajhost2fa'|url }}">{{ 'Enable 2FA'|trans }}</a>
+            </div>
+        </div>
+    {% elseif tfa.enabled and tfa.backup_codes_left < 3 %}
+        <div class="card border-info mb-4">
+            <div class="card-body">
+                <p class="card-text mb-2">{{ 'You are running out of 2FA backup codes.'|trans }}</p>
+                <a class="btn btn-outline-primary btn-sm" href="{{ 'tajhost2fa'|url }}">{{ 'Manage 2FA'|trans }}</a>
+            </div>
+        </div>
+    {% endif %}
+{% endif %}

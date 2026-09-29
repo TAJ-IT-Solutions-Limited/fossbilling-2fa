@@ -1,0 +1,46 @@
+{# TAJHOST 2FA: adds the verification code field to the staff login form. #}
+<div id="tajhost2fa-login" class="mb-3" style="display:none">
+    <label class="form-label" for="tajhost2fa_code">{{ 'Two-factor authentication code'|trans }}</label>
+    <input class="form-control" id="tajhost2fa_code" type="text" name="tajhost2fa_code"
+           inputmode="text" autocomplete="one-time-code" maxlength="11" spellcheck="false"
+           placeholder="{{ '6-digit code or backup code'|trans }}">
+    <div class="form-hint mt-1" id="tajhost2fa-hint">{{ 'Open your authenticator app and enter the current code.'|trans }}</div>
+</div>
+<script>
+(function () {
+    var ACTION = 'staff/login';
+    function init() {
+        var box = document.getElementById('tajhost2fa-login');
+        var form = document.querySelector('form[action*="' + ACTION + '"]');
+        if (!box || !form) { return; }
+        var footer = form.querySelector('.form-footer') || form.querySelector('button[type="submit"]');
+        form.insertBefore(box, footer && footer.parentNode === form ? footer : null);
+
+        var input = document.getElementById('tajhost2fa_code');
+        function reveal() {
+            box.style.display = '';
+            setTimeout(function () { input.value = ''; input.focus(); }, 50);
+        }
+
+        var ui = window.FOSSBilling && window.FOSSBilling.ui;
+        if (ui && typeof ui.notify === 'function' && !ui.__tajhost2fa) {
+            var original = ui.notify.bind(ui);
+            ui.notify = function (message, type) {
+                var m = typeof message === 'string' ? message.match(/\((200[123])\)\s*$/) : null;
+                if (m) {
+                    reveal();
+                    if (m[1] === '2001') { return; } // just show the field, no error toast
+                    return original(message.replace(/\s*\(200[123]\)\s*$/, ''), type);
+                }
+                return original(message, type);
+            };
+            ui.__tajhost2fa = true;
+        }
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();
+</script>
