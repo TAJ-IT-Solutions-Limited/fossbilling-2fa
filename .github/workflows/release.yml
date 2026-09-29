@@ -1,0 +1,28 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint PHP
+        run: find src -name '*.php' -print0 | xargs -0 -n1 php -l
+
+      - name: Build archive
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cp LICENSE README.md src/
+          (cd src && zip -r "../tajhost2fa-${VERSION}.zip" .)
+
+      - name: Upload archive to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" tajhost2fa-*.zip --clobber
