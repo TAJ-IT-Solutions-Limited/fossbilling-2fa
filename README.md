@@ -2,7 +2,7 @@
 
 Two-factor authentication (2FA) for [FOSSBilling](https://fossbilling.org) staff and clients, using standard authenticator apps. It also generates one-time backup codes.
 
-Built and maintained by [TAJHOST](https://tajhost.com).
+Built and maintained by [TAJHOST](https://tajhost.com), a web hosting and IT services provider based in the UAE. TAJHOST runs this extension on its own FOSSBilling installation.
 
 ## Features
 
@@ -102,6 +102,10 @@ Go to **System → Two-Factor Authentication**. The page is also linked as the m
 
 - **Login history.** FOSSBilling's login history is written when the password is verified. A login attempt that fails the 2FA step can therefore still appear in *Activity → Login history*.
 - **Custom themes.** A theme that removes the `admin.staff.login.form.after` or `client.page.login.form.after` widget slots from its login templates also removes the code field. Custom login forms can instead add an input named `tajhost2fa_code`.
+
+## About TAJHOST
+
+[TAJHOST](https://tajhost.com) provides cPanel hosting, domain registration, SSL certificates and business email, together with IT infrastructure and security services. It is part of TAJ IT Solutions Limited. For questions, bug reports or custom FOSSBilling development, open an issue or contact us through [tajhost.com](https://tajhost.com).
 
 ## License
 
