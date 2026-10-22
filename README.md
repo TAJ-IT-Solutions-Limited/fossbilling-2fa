@@ -2,7 +2,7 @@
 
 Two-factor authentication (2FA) for [FOSSBilling](https://fossbilling.org) staff and clients, using standard authenticator apps. It also generates one-time backup codes.
 
-Built and maintained by [TAJHOST](https://tajhost.com), a web hosting and IT services provider based in the UAE. TAJHOST runs this extension on its own FOSSBilling installation.
+Built and maintained by [TAJHOST](https://tajhost.com), the web hosting and IT services brand of TAJ IT Solutions Limited, a company registered in Malta. TAJHOST runs this extension on its own FOSSBilling installation.
 
 ## Features
 
@@ -105,7 +105,7 @@ Go to **System → Two-Factor Authentication**. The page is also linked as the m
 
 ## About TAJHOST
 
-[TAJHOST](https://tajhost.com) provides cPanel hosting, domain registration, SSL certificates and business email, together with IT infrastructure and security services. It is part of TAJ IT Solutions Limited. For questions, bug reports or custom FOSSBilling development, open an issue or contact us through [tajhost.com](https://tajhost.com).
+[TAJHOST](https://tajhost.com) provides cPanel hosting, domain registration, SSL certificates and business email, together with IT infrastructure and security services. TAJHOST is a brand of TAJ IT Solutions Limited (registered in Malta, company no. C 117054). For questions, bug reports or custom FOSSBilling development, open an issue or contact us through [tajhost.com](https://tajhost.com).
 
 ## License
 
