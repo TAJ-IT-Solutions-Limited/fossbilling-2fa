@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit bootstrap="tests/bootstrap.php">
+  <testsuites>
+    <testsuite name="tajhost2fa">
+      <file>tests/TotpTest.php</file>
+      <file>tests/ServiceTest.php</file>
+    </testsuite>
+  </testsuites>
+</phpunit>

@@ -49,21 +49,25 @@ final class Totp
     /**
      * Verifies a code within +/- $window steps.
      *
-     * Returns the matched time step, or null when the code is invalid or was
-     * already used (step <= $lastStep, replay protection).
+     * Returns the matched time step, or null when the code is invalid.
+     * An older step is rejected. The same step is rejected only when it was
+     * used within the last 90 seconds, so a fresh login can reuse it.
      */
-    public static function verify(string $secret, string $code, int $lastStep = 0, int $window = 1, int $period = 30, int $digits = 6, ?int $time = null): ?int
+    public static function verify(string $secret, string $code, int $lastStep = 0, int $window = 1, int $period = 30, int $digits = 6, ?int $time = null, ?int $lastUsedAt = null): ?int
     {
         if (!preg_match('/^\d{' . $digits . '}$/', $code)) {
             return null;
         }
 
-        $current = self::currentStep($period, $time);
+        $now = $time ?? time();
+        $current = self::currentStep($period, $now);
         $matched = null;
         for ($i = -$window; $i <= $window; ++$i) {
             $step = $current + $i;
+            $sameStepFresh = $step === $lastStep && $lastUsedAt !== null && ($now - $lastUsedAt) > 90;
+            $accepted = $step > $lastStep || $sameStepFresh;
             // Always evaluate every candidate so timing does not reveal which step matched.
-            if (hash_equals(self::codeAt($secret, $step, $digits), $code) && $step > $lastStep) {
+            if (hash_equals(self::codeAt($secret, $step, $digits), $code) && $accepted) {
                 $matched = $step;
             }
         }

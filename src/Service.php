@@ -60,6 +60,8 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
                 'display_name' => __trans('Manage two-factor authentication'),
                 'description' => __trans('Allows the staff member to view 2FA status and reset 2FA for other staff members and clients.'),
             ],
+            // Empty so FOSSBilling 0.8.9 registers the settings page. A missing key is a 403.
+            'manage_settings' => [],
         ];
     }
 
@@ -251,7 +253,12 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
         $normalized = preg_replace('/\s+/', '', $code);
 
         if (preg_match('/^\d{' . self::DIGITS . '}$/', (string) $normalized)) {
-            $step = Totp::verify($secret, (string) $normalized, (int) $record['last_step'], self::WINDOW, self::PERIOD, self::DIGITS);
+            $lastUsedAt = null;
+            if (!empty($record['last_used_at'])) {
+                $parsed = strtotime((string) $record['last_used_at']);
+                $lastUsedAt = $parsed === false ? null : $parsed;
+            }
+            $step = Totp::verify($secret, (string) $normalized, (int) $record['last_step'], self::WINDOW, self::PERIOD, self::DIGITS, null, $lastUsedAt);
             if ($step !== null) {
                 $this->di['db']->exec(
                     'UPDATE `' . self::TABLE . '` SET last_step = :step, failed_attempts = 0, locked_until = NULL, last_used_at = :now, updated_at = :now WHERE id = :id',
@@ -298,18 +305,44 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
 
     private function registerFailure(array $record): void
     {
+        $this->consumeIpLimit();
         $failed = (int) $record['failed_attempts'] + 1;
-        $lockedUntil = null;
-        if ($failed >= self::MAX_FAILED_ATTEMPTS) {
-            $lockedUntil = date('Y-m-d H:i:s', time() + self::LOCK_MINUTES * 60);
-            $failed = 0;
-            $this->di['logger']->warning(sprintf('2FA locked for %s #%d after too many invalid codes', $record['user_type'], $record['user_id']));
+        $minutes = $this->lockMinutes($failed);
+        $lockedUntil = $minutes > 0 ? date('Y-m-d H:i:s', time() + $minutes * 60) : null;
+        if ($minutes > 0) {
+            $this->di['logger']->warning(sprintf('2FA locked for %s #%d for %d minutes after %d invalid codes', $record['user_type'], $record['user_id'], $minutes, $failed));
         }
 
         $this->di['db']->exec(
             'UPDATE `' . self::TABLE . '` SET failed_attempts = :f, locked_until = :l, updated_at = :now WHERE id = :id',
             ['f' => $failed, 'l' => $lockedUntil, 'now' => $this->now(), 'id' => $record['id']]
         );
+    }
+
+    /** Five failures lock for 15 minutes, ten for 30, fifteen and above for 60. The counter stays. */
+    private function lockMinutes(int $failed): int
+    {
+        if ($failed >= 15) {
+            return 60;
+        }
+        if ($failed >= 10) {
+            return 30;
+        }
+        if ($failed >= self::MAX_FAILED_ATTEMPTS) {
+            return self::LOCK_MINUTES;
+        }
+
+        return 0;
+    }
+
+    /** Counts a failed code against the existing core api_login window for this IP. */
+    private function consumeIpLimit(): void
+    {
+        if (!isset($this->di['rate_limiter'])) {
+            return;
+        }
+        $ip = (string) ($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0');
+        $this->di['rate_limiter']->consumeOrThrow('api_login', $ip);
     }
 
     /* ------------------------------------------------------------------
@@ -454,12 +487,84 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
     /**
      * Admin action: removes 2FA from an account (e.g. the user lost their phone).
      */
-    public function resetFor(string $type, int $userId): bool
+    public function resetFor(string $type, int $userId, ?int $actingAdminId = null): bool
     {
+        if (!in_array($type, [self::TYPE_ADMIN, self::TYPE_CLIENT], true) || $userId < 1) {
+            throw new InformationException('Unknown account.');
+        }
+        if ($type === self::TYPE_ADMIN && $actingAdminId !== null && $actingAdminId === $userId) {
+            throw new InformationException('You cannot reset your own two-factor authentication.');
+        }
+
         $this->deleteRecord($type, $userId);
-        $this->di['logger']->warning(sprintf('2FA reset by staff for %s #%d', $type, $userId));
+        $this->di['logger']->warning(sprintf('2FA reset by admin #%d for %s #%d', (int) $actingAdminId, $type, $userId));
+        $this->emailReset($type, $userId);
 
         return true;
+    }
+
+    private function emailReset(string $type, int $userId): void
+    {
+        if (!isset($this->di['mod_service'])) {
+            return;
+        }
+        $table = $type === self::TYPE_ADMIN ? 'admin' : 'client';
+        $row = $this->di['db']->getRow('SELECT email FROM `' . $table . '` WHERE id = :id', ['id' => $userId]);
+        $to = is_array($row) ? trim((string) ($row['email'] ?? '')) : '';
+        if ($to === '' || !str_contains($to, '@')) {
+            return;
+        }
+        $this->di['mod_service']('email')->sendMail(
+            $to,
+            null,
+            'Two-factor authentication was reset',
+            'A staff member reset two-factor authentication on your account. Set it up again before the next sign-in. أعاد أحد الموظفين ضبط التحقق بخطوتين. أعد إعداده قبل تسجيل الدخول التالي.',
+            null,
+            null,
+            $type === self::TYPE_CLIENT ? $userId : null,
+            $type === self::TYPE_ADMIN ? $userId : null
+        );
+    }
+
+    /**
+     * Refuses other admin API calls when staff 2FA is required and this admin has none.
+     * FOSSBilling 0.8.9 does not fire a before-every-admin-API event, so this runs only
+     * if the core fires onBeforeAdminApiCall.
+     */
+    public static function onBeforeAdminApiCall(\Box_Event $event): void
+    {
+        $params = $event->getParameters();
+        $event->getDi()['mod_service']('tajhost2fa')->assertAdminApiAllowed(
+            (string) ($params['module'] ?? ''),
+            (string) ($params['method'] ?? '')
+        );
+    }
+
+    public function assertAdminApiAllowed(string $module, string $method): void
+    {
+        if (!$this->getSettings()['enforce_admin']) {
+            return;
+        }
+        if (!isset($this->di['loggedin_admin'])) {
+            return;
+        }
+        $admin = $this->di['loggedin_admin'];
+        if (!is_object($admin) || !isset($admin->id)) {
+            return;
+        }
+        $allowed = [
+            'tajhost2fa' => ['status', 'setup_start', 'setup_confirm', 'disable', 'backup_codes_regenerate'],
+            'profile' => ['get', 'update', 'change_password', 'logout'],
+        ];
+        if (in_array($method, $allowed[$module] ?? [], true)) {
+            return;
+        }
+        $record = $this->getRecord(self::TYPE_ADMIN, (int) $admin->id);
+        if ($record && (int) $record['enabled'] === 1) {
+            return;
+        }
+
+        throw new InformationException('Set up two-factor authentication before using the admin API.');
     }
 
     public function listEnabled(string $type): array
