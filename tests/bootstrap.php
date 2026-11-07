@@ -30,8 +30,13 @@ namespace Pimple {
 }
 
 namespace FOSSBilling {
+    /**
+     * Matches FOSSBilling 0.8.9 src/library/FOSSBilling/InjectionAwareInterface.php.
+     * Commit e594f8a5f91ea4cc905708f8dc1e42ccb752ed21. The interface declares setDi only.
+     */
     interface InjectionAwareInterface
     {
+        public function setDi(\Pimple\Container $di): void;
     }
 
     class InformationException extends \RuntimeException
@@ -44,31 +49,76 @@ namespace FOSSBilling {
 }
 
 namespace FOSSBilling\Interfaces {
+    /**
+     * Matches FOSSBilling 0.8.9 src/library/FOSSBilling/Interfaces/WidgetProviderInterface.php.
+     * Commit e594f8a5f91ea4cc905708f8dc1e42ccb752ed21.
+     */
     interface WidgetProviderInterface
     {
+        public function getWidgets(): array;
     }
 }
 
 namespace FOSSBilling\Api {
-    abstract class AbstractApi
+    /**
+     * Signature double for FOSSBilling 0.8.9 src/library/FOSSBilling/Api/AbstractApi.php.
+     * Commit e594f8a5f91ea4cc905708f8dc1e42ccb752ed21.
+     * The real class body is not loaded here. Method signatures match that file.
+     */
+    abstract class AbstractApi implements \FOSSBilling\InjectionAwareInterface
     {
         public object $service;
         public object $identity;
         public array $checks = [];
 
-        public function checkPermissions(string $module, string $permission): void
+        public function setDi(\Pimple\Container $di): void
         {
-            $this->checks[] = [$module, $permission];
         }
 
-        public function getService(): object
+        public function getDi(): ?\Pimple\Container
+        {
+            return null;
+        }
+
+        public function setMod($mod): void
+        {
+        }
+
+        public function getMod()
+        {
+        }
+
+        public function setIdentity($identity): void
+        {
+            $this->identity = $identity;
+        }
+
+        public function getIdentity()
+        {
+            return $this->identity;
+        }
+
+        public function setService($service): void
+        {
+            $this->service = $service;
+        }
+
+        public function getService()
         {
             return $this->service;
         }
 
-        public function getIdentity(): object
+        public function setIp($ip): void
         {
-            return $this->identity;
+        }
+
+        public function getIp()
+        {
+        }
+
+        protected function checkPermissions(string $module, ?string $key = null, mixed $constraint = null): void
+        {
+            $this->checks[] = [$module, $key];
         }
     }
 }
