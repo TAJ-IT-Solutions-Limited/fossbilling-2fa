@@ -146,6 +146,18 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
         return $name ? (string) $name : 'FOSSBilling';
     }
 
+    private function systemEmail(): ?string
+    {
+        try {
+            $email = $this->di['mod_service']('system')->getParamValue('company_email');
+        } catch (\Throwable) {
+            return null;
+        }
+        $email = trim((string) $email);
+
+        return str_contains($email, '@') ? $email : null;
+    }
+
     /* ------------------------------------------------------------------
      * Event hooks
      * ------------------------------------------------------------------ */
@@ -521,12 +533,18 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
         if ($to === '' || !str_contains($to, '@')) {
             return;
         }
+        $from = $this->systemEmail();
+        if ($from === null) {
+            $this->di['logger']->warning('2FA reset email could not be sent');
+
+            return;
+        }
         try {
-            // FOSSBilling 0.8.9 Email\Service::sendMail($to, $from, ...) leaves $from untyped.
-            // _queue casts it with (string), so null becomes an empty sender and does not throw there.
+            // FOSSBilling 0.8.9 Email\Service::sendMail line 434. _queue line 667 casts $from to string,
+            // so null would queue an empty sender. company_email is the core company address.
             $this->di['mod_service']('email')->sendMail(
                 $to,
-                null,
+                $from,
                 'Two-factor authentication was reset',
                 'A staff member reset two-factor authentication on your account. Set it up again before the next sign-in. أعاد أحد الموظفين ضبط التحقق بخطوتين. أعد إعداده قبل تسجيل الدخول التالي.',
                 null,

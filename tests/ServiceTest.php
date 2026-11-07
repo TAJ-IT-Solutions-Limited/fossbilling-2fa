@@ -95,6 +95,8 @@ final class ServiceTest extends TestCase
         $this->assertStringContainsString('admin #9', $log->lines[0]);
         $this->assertStringContainsString('admin #4', $log->lines[0]);
         $this->assertSame('staff@example.com', $mail->sent[0][0]);
+        $this->assertSame('billing@example.com', $mail->sent[0][1]);
+        $this->assertNotSame('', $mail->sent[0][1]);
     }
 
     public function testResetSucceedsWhenMailThrows(): void
@@ -217,7 +219,16 @@ final class ServiceTest extends TestCase
         $di['crypt'] = new IdentityCrypt();
         $di['mod_config'] = static fn (string $name): array => ['issuer' => 'Test'];
         if ($withMail) {
-            $di['mod_service'] = static fn (string $name) => $mail;
+            $system = new FakeSystem();
+            $di['mod_service'] = static function (string $name) use ($mail, $system): object {
+                if ($name === 'email') {
+                    return $mail;
+                }
+                if ($name === 'system') {
+                    return $system;
+                }
+                throw new \RuntimeException($name);
+            };
         }
         if ($withLimit) {
             $di['rate_limiter'] = $limit;
@@ -314,6 +325,14 @@ final class FakeLimit
     public function consumeOrThrow(string $policy, string $subject): void
     {
         $this->calls[] = [$policy, $subject];
+    }
+}
+
+final class FakeSystem
+{
+    public function getParamValue(string $key): ?string
+    {
+        return $key === 'company_email' ? 'billing@example.com' : null;
     }
 }
 
