@@ -26,14 +26,14 @@ final class TotpTest extends TestCase
         }
     }
 
-    public function testSameStepIsRejectedOnlyWithinNinetySeconds(): void
+    public function testSameStepStaysRejected(): void
     {
         $time = 1234567890;
         $step = intdiv($time, 30);
         $code = Totp::codeAt(self::SECRET, $step);
 
-        $this->assertNull(Totp::verify(self::SECRET, $code, $step, 1, 30, 6, $time, $time - 10));
-        $this->assertSame($step, Totp::verify(self::SECRET, $code, $step, 1, 30, 6, $time, $time - 120));
-        $this->assertNull(Totp::verify(self::SECRET, $code, $step + 1, 1, 30, 6, $time, $time - 120));
+        $this->assertNull(Totp::verify(self::SECRET, $code, $step, 1, 30, 6, $time));
+        $this->assertSame($step, Totp::matchedStep(self::SECRET, $code, 1, 30, 6, $time));
+        $this->assertNull(Totp::verify(self::SECRET, $code, $step + 1, 1, 30, 6, $time));
     }
 }

@@ -31,27 +31,33 @@ final class ServiceTest extends TestCase
         $this->assertSame([['tajhost2fa', 'manage']], $api->checks);
     }
 
-    public function testCheckCodeAcceptsSameStepAfterNinetySeconds(): void
+    public function testCheckCodeAcceptsANewerStep(): void
     {
         $now = time();
         $step = intdiv($now, 30);
         $code = Totp::codeAt(self::SECRET, $step);
         [$service, $db] = $this->pair();
-        $record = $this->record($step, date('Y-m-d H:i:s', $now - 120));
+        $record = $this->record($step - 2, date('Y-m-d H:i:s', $now - 120));
 
         $this->assertTrue($service->checkCode($record, $code));
         $this->assertSame($step, $db->execs[0][1]['step']);
     }
 
-    public function testCheckCodeRejectsSameStepInsideNinetySeconds(): void
+    public function testReplayedCodeDoesNotAdvanceTheLock(): void
     {
         $now = time();
         $step = intdiv($now, 30);
         $code = Totp::codeAt(self::SECRET, $step);
         [$service, $db] = $this->pair();
-        $record = $this->record($step, date('Y-m-d H:i:s', $now - 10));
+        $db->row = $this->record($step, date('Y-m-d H:i:s', $now - 10));
+        $service->getDi()['request'] = new FakeRequest($code);
 
-        $this->assertFalse($service->checkCode($record, $code));
+        try {
+            $service->verifyLogin(Service::TYPE_ADMIN, 4);
+            $this->fail('A reused code must be refused.');
+        } catch (InformationException $e) {
+            $this->assertSame('This code was already used. Wait for the next code.', $e->getMessage());
+        }
         $this->assertSame([], $db->execs);
     }
 
@@ -91,6 +97,17 @@ final class ServiceTest extends TestCase
         $this->assertSame('staff@example.com', $mail->sent[0][0]);
     }
 
+    public function testResetSucceedsWhenMailThrows(): void
+    {
+        [$service, $db, $log, $mail] = $this->pair(true);
+        $db->row = ['email' => 'staff@example.com'];
+        $mail->throw = true;
+
+        $this->assertTrue($service->resetFor(Service::TYPE_ADMIN, 4, 9));
+        $this->assertStringContainsString('DELETE FROM', $db->execs[0][0]);
+        $this->assertContains('2FA reset email could not be sent', $log->lines);
+    }
+
     public function testLockEscalatesAndKeepsTheCounter(): void
     {
         $_SERVER['REMOTE_ADDR'] = '203.0.113.9';
@@ -111,6 +128,17 @@ final class ServiceTest extends TestCase
         $this->assertCount(3, $limit->calls);
     }
 
+    public function testIpLimitUsesTheRequestClientAddress(): void
+    {
+        $_SERVER['REMOTE_ADDR'] = '10.0.0.8';
+        [$service, , , , $limit] = $this->pair(false, true);
+        $service->getDi()['request'] = new FakeRequest('000000', '198.51.100.20');
+
+        $this->failTimes($service, 1);
+
+        $this->assertSame(['api_login', '198.51.100.20'], $limit->calls[0]);
+    }
+
     public function testUnenrolledAdminIsRefusedExceptSetupProfileAndLogout(): void
     {
         [$service] = $this->pair();
@@ -128,6 +156,16 @@ final class ServiceTest extends TestCase
 
         $service->getDi()['db']->row = ['enabled' => 1, 'id' => 1];
         $service->assertAdminApiAllowed('staff', 'get');
+    }
+
+    public function testLoginAndAnonymousCallsAreNotRefused(): void
+    {
+        [$service] = $this->pair();
+        $service->assertAdminApiAllowed('staff', 'get');
+
+        $service->getDi()['loggedin_admin'] = (object) ['id' => 8];
+        $service->assertAdminApiAllowed('guest', 'login');
+        $service->assertAdminApiAllowed('staff', 'login');
     }
 
     public function testBeforeAdminApiHookUsesTheGuard(): void
@@ -226,11 +264,46 @@ final class FakeMail
 {
     public array $sent = [];
 
+    public bool $throw = false;
+
     public function sendMail(mixed ...$args): bool
     {
+        if ($this->throw) {
+            throw new \RuntimeException('smtp down');
+        }
         $this->sent[] = $args;
 
         return true;
+    }
+}
+
+final class FakeRequest
+{
+    public object $request;
+
+    public function __construct(private string $code, private string $ip = '203.0.113.9')
+    {
+        $code = $this->code;
+        $this->request = new class($code) {
+            public function __construct(private string $code)
+            {
+            }
+
+            public function get(string $key): string
+            {
+                return $this->code;
+            }
+        };
+    }
+
+    public function getContent(): string
+    {
+        return '';
+    }
+
+    public function getClientIp(): string
+    {
+        return $this->ip;
     }
 }
 

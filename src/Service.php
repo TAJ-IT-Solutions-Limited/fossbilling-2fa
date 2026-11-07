@@ -253,12 +253,7 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
         $normalized = preg_replace('/\s+/', '', $code);
 
         if (preg_match('/^\d{' . self::DIGITS . '}$/', (string) $normalized)) {
-            $lastUsedAt = null;
-            if (!empty($record['last_used_at'])) {
-                $parsed = strtotime((string) $record['last_used_at']);
-                $lastUsedAt = $parsed === false ? null : $parsed;
-            }
-            $step = Totp::verify($secret, (string) $normalized, (int) $record['last_step'], self::WINDOW, self::PERIOD, self::DIGITS, null, $lastUsedAt);
+            $step = Totp::verify($secret, (string) $normalized, (int) $record['last_step'], self::WINDOW, self::PERIOD, self::DIGITS);
             if ($step !== null) {
                 $this->di['db']->exec(
                     'UPDATE `' . self::TABLE . '` SET last_step = :step, failed_attempts = 0, locked_until = NULL, last_used_at = :now, updated_at = :now WHERE id = :id',
@@ -266,6 +261,10 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
                 );
 
                 return true;
+            }
+            $seen = Totp::matchedStep($secret, (string) $normalized, self::WINDOW, self::PERIOD, self::DIGITS);
+            if ($seen !== null && $seen <= (int) $record['last_step']) {
+                throw new InformationException('This code was already used. Wait for the next code.');
             }
 
             return false;
@@ -341,7 +340,15 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
         if (!isset($this->di['rate_limiter'])) {
             return;
         }
-        $ip = (string) ($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0');
+        $ip = '0.0.0.0';
+        if (isset($this->di['request']) && is_object($this->di['request']) && method_exists($this->di['request'], 'getClientIp')) {
+            $ip = trim((string) $this->di['request']->getClientIp());
+        } elseif (!empty($_SERVER['REMOTE_ADDR']) && is_string($_SERVER['REMOTE_ADDR'])) {
+            $ip = $_SERVER['REMOTE_ADDR'];
+        }
+        if ($ip === '') {
+            $ip = '0.0.0.0';
+        }
         $this->di['rate_limiter']->consumeOrThrow('api_login', $ip);
     }
 
@@ -514,16 +521,22 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
         if ($to === '' || !str_contains($to, '@')) {
             return;
         }
-        $this->di['mod_service']('email')->sendMail(
-            $to,
-            null,
-            'Two-factor authentication was reset',
-            'A staff member reset two-factor authentication on your account. Set it up again before the next sign-in. أعاد أحد الموظفين ضبط التحقق بخطوتين. أعد إعداده قبل تسجيل الدخول التالي.',
-            null,
-            null,
-            $type === self::TYPE_CLIENT ? $userId : null,
-            $type === self::TYPE_ADMIN ? $userId : null
-        );
+        try {
+            // FOSSBilling 0.8.9 Email\Service::sendMail($to, $from, ...) leaves $from untyped.
+            // _queue casts it with (string), so null becomes an empty sender and does not throw there.
+            $this->di['mod_service']('email')->sendMail(
+                $to,
+                null,
+                'Two-factor authentication was reset',
+                'A staff member reset two-factor authentication on your account. Set it up again before the next sign-in. أعاد أحد الموظفين ضبط التحقق بخطوتين. أعد إعداده قبل تسجيل الدخول التالي.',
+                null,
+                null,
+                $type === self::TYPE_CLIENT ? $userId : null,
+                $type === self::TYPE_ADMIN ? $userId : null
+            );
+        } catch (\Throwable) {
+            $this->di['logger']->warning('2FA reset email could not be sent');
+        }
     }
 
     /**
@@ -542,6 +555,9 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
 
     public function assertAdminApiAllowed(string $module, string $method): void
     {
+        if ($this->isLoginCall($module, $method)) {
+            return;
+        }
         if (!$this->getSettings()['enforce_admin']) {
             return;
         }
@@ -565,6 +581,17 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
         }
 
         throw new InformationException('Set up two-factor authentication before using the admin API.');
+    }
+
+    private function isLoginCall(string $module, string $method): bool
+    {
+        $module = strtolower($module);
+        $method = strtolower($method);
+        if ($module === 'guest' || $method === 'login' || $method === 'staff_login' || $method === 'client_login') {
+            return true;
+        }
+
+        return false;
     }
 
     public function listEnabled(string $type): array

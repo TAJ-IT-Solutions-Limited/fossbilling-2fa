@@ -49,30 +49,35 @@ final class Totp
     /**
      * Verifies a code within +/- $window steps.
      *
-     * Returns the matched time step, or null when the code is invalid.
-     * An older step is rejected. The same step is rejected only when it was
-     * used within the last 90 seconds, so a fresh login can reuse it.
+     * Returns the matched time step, or null when the code is invalid or already used.
+     * A step at or before $lastStep is rejected. A code in the accepted window is
+     * never old enough for a timed exception, so replay stays strict.
      */
-    public static function verify(string $secret, string $code, int $lastStep = 0, int $window = 1, int $period = 30, int $digits = 6, ?int $time = null, ?int $lastUsedAt = null): ?int
+    public static function verify(string $secret, string $code, int $lastStep = 0, int $window = 1, int $period = 30, int $digits = 6, ?int $time = null): ?int
     {
         if (!preg_match('/^\d{' . $digits . '}$/', $code)) {
             return null;
         }
 
-        $now = $time ?? time();
-        $current = self::currentStep($period, $now);
+        $current = self::currentStep($period, $time);
         $matched = null;
         for ($i = -$window; $i <= $window; ++$i) {
             $step = $current + $i;
-            $sameStepFresh = $step === $lastStep && $lastUsedAt !== null && ($now - $lastUsedAt) > 90;
-            $accepted = $step > $lastStep || $sameStepFresh;
             // Always evaluate every candidate so timing does not reveal which step matched.
-            if (hash_equals(self::codeAt($secret, $step, $digits), $code) && $accepted) {
+            if (hash_equals(self::codeAt($secret, $step, $digits), $code) && $step > $lastStep) {
                 $matched = $step;
             }
         }
 
         return $matched;
+    }
+
+    /**
+     * The matching step inside the window, including one that replay protection rejects.
+     */
+    public static function matchedStep(string $secret, string $code, int $window = 1, int $period = 30, int $digits = 6, ?int $time = null): ?int
+    {
+        return self::verify($secret, $code, -1, $window, $period, $digits, $time);
     }
 
     public static function provisioningUri(string $secret, string $account, string $issuer, int $digits = 6, int $period = 30): string

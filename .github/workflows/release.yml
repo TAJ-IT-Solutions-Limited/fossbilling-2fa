@@ -20,7 +20,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           cp LICENSE README.md src/
-          (cd src && zip -r "../tajhost2fa-${VERSION}.zip" .)
+          (cd src && zip -r "../tajhost2fa-${VERSION}.zip" . -x assets/icon.svg)
 
       - name: Upload archive to the release
         env:

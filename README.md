@@ -12,7 +12,7 @@ Built and maintained by [TAJHOST](https://tajhost.com), the web hosting and IT s
 - **Clients.** 2FA is **optional**. It is turned on from the client area, and a card on the dashboard suggests enabling it.
 - **Brute-force protection:**
   - After 5 invalid codes the account's 2FA is locked for 15 minutes. The counter is kept. At 10 failures the lock is 30 minutes, and at 15 or more it is 60 minutes.
-  - An older time step is rejected. The same step is rejected only when it was used in the last 90 seconds, so a new login can reuse a still-valid code.
+  - An older or already used time step is rejected. A reused code tells the user to wait for the next code, and it does not count toward the lock. A code that is still inside the clock window is never old enough to be treated as a new login.
   - Each failed code also counts against FOSSBilling's existing per-IP `api_login` limit.
 - **Secrets encrypted at rest** with FOSSBilling's built-in `crypt` service.
 - **Administration.** Staff with the `manage` permission can see who has 2FA and reset it for a staff member or client who lost their phone.
@@ -26,6 +26,7 @@ Built and maintained by [TAJHOST](https://tajhost.com), the web hosting and IT s
 
 - FOSSBilling **0.8.x only, not 2.x yet.** The minimum is **0.8.3** because the login field uses the widget system. The extension directory does not accept a maximum version, so the ceiling is this document, not `manifest.json`.
 - PHP 8.2 or newer.
+- This package does not ship an icon. The grey file under `src/assets/` is a placeholder for a later directory release and is left out of the release archive.
 
 ## Installation
 
