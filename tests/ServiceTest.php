@@ -58,7 +58,8 @@ final class ServiceTest extends TestCase
         } catch (InformationException $e) {
             $this->assertSame('This code was already used. Wait for the next code.', $e->getMessage());
         }
-        $this->assertSame([], $db->execs);
+        $this->assertCount(1, $db->execs);
+        $this->assertSame(1, $db->execs[0][1]['f']);
     }
 
     public function testBackupCodeIsConsumed(): void

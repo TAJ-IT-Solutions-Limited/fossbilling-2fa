@@ -222,8 +222,13 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
             throw new InformationException('Enter the 6-digit code from your authenticator app, or one of your backup codes.', null, self::ERR_CODE_REQUIRED);
         }
 
-        if ($this->checkCode($record, $code)) {
-            return;
+        try {
+            if ($this->checkCode($record, $code)) {
+                return;
+            }
+        } catch (InformationException $error) {
+            $this->registerFailure($record);
+            throw $error;
         }
 
         $this->registerFailure($record);
@@ -426,6 +431,7 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
      */
     public function confirmSetup(string $type, int $userId, string $code): array
     {
+        $this->consumeIpLimit();
         $this->assertAvailable($type);
 
         $record = $this->getRecord($type, $userId);
@@ -438,8 +444,13 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
 
         $secret = $this->decryptSecret($record['pending_secret']);
         $code = (string) preg_replace('/\s+/', '', $code);
-        $step = $secret ? Totp::verify($secret, $code, 0, self::WINDOW, self::PERIOD, self::DIGITS) : null;
+        $step = $secret ? Totp::verify($secret, $code, (int) ($record['last_step'] ?? 0), self::WINDOW, self::PERIOD, self::DIGITS) : null;
         if ($step === null) {
+            $this->registerFailure($record);
+            $seen = $secret ? Totp::matchedStep($secret, $code, self::WINDOW, self::PERIOD, self::DIGITS) : null;
+            if ($seen !== null && $seen <= (int) ($record['last_step'] ?? 0)) {
+                throw new InformationException('This code was already used. Wait for the next code.');
+            }
             throw new InformationException('The code is not valid. Check that the time on your phone is correct and try again.');
         }
 
@@ -514,6 +525,9 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
         if ($type === self::TYPE_ADMIN && $actingAdminId !== null && $actingAdminId === $userId) {
             throw new InformationException('You cannot reset your own two-factor authentication.');
         }
+        if ($type === self::TYPE_ADMIN && $actingAdminId !== null && $this->adminOutranks($actingAdminId, $userId)) {
+            throw new InformationException('You cannot reset two-factor authentication for a higher-rank or super administrator.');
+        }
 
         $this->deleteRecord($type, $userId);
         $this->di['logger']->warning(sprintf('2FA reset by admin #%d for %s #%d', (int) $actingAdminId, $type, $userId));
@@ -558,9 +572,10 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
     }
 
     /**
-     * Refuses other admin API calls when staff 2FA is required and this admin has none.
-     * FOSSBilling 0.8.9 does not fire a before-every-admin-API event, so this runs only
-     * if the core fires onBeforeAdminApiCall.
+     * Dead on FOSSBilling 0.8.9. That core never fires onBeforeAdminApiCall.
+     * Existing sessions are sent to setup by the admin.theme.content.before widget
+     * while enforce_admin is on. 0.8.9 keeps admin sessions in PHP's session store,
+     * so one staff member cannot invalidate another staff member's session from here.
      */
     public static function onBeforeAdminApiCall(\Box_Event $event): void
     {
@@ -617,12 +632,81 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
         $table = $type === self::TYPE_ADMIN ? 'admin' : 'client';
         $nameSql = $type === self::TYPE_ADMIN ? 'u.name' : "CONCAT_WS(' ', u.first_name, u.last_name)";
 
-        return $this->di['db']->getAll(
+        $rows = $this->di['db']->getAll(
             'SELECT t.user_id AS id, u.email, ' . $nameSql . ' AS name, t.enabled_at, t.last_used_at, t.backup_codes
              FROM `' . self::TABLE . '` t JOIN `' . $table . '` u ON u.id = t.user_id
              WHERE t.user_type = :t AND t.enabled = 1 ORDER BY t.enabled_at DESC',
             ['t' => $type]
         );
+        foreach ($rows as $index => $row) {
+            $hashes = json_decode((string) ($row['backup_codes'] ?? ''), true);
+            $rows[$index]['backup_code_count'] = is_array($hashes) ? count($hashes) : 0;
+            unset($rows[$index]['backup_codes']);
+        }
+
+        return $rows;
+    }
+
+    private function adminOutranks(int $actorId, int $targetId): bool
+    {
+        if (!isset($this->di['db']) || !is_object($this->di['db']) || !method_exists($this->di['db'], 'getAll')) {
+            return false;
+        }
+        $groups = $this->di['db']->getAll(
+            'SELECT m.admin_id, g.id, g.system_name
+             FROM admin_group_member m
+             JOIN admin_group g ON g.id = m.admin_group_id
+             WHERE m.admin_id = :actor OR m.admin_id = :target',
+            ['actor' => $actorId, 'target' => $targetId]
+        );
+        $tree = $this->di['db']->getAll('SELECT id, parent_id FROM admin_group', []);
+        if (!is_array($groups)) {
+            return false;
+        }
+        $targetSuper = false;
+        $actorGroups = [];
+        $targetGroups = [];
+        $parents = [];
+        foreach (is_array($tree) ? $tree : [] as $node) {
+            if (is_array($node)) {
+                $parents[(int) ($node['id'] ?? 0)] = (int) ($node['parent_id'] ?? 0);
+            }
+        }
+        foreach ($groups as $group) {
+            if (!is_array($group)) {
+                continue;
+            }
+            $id = (int) ($group['id'] ?? 0);
+            if ((string) ($group['system_name'] ?? '') === 'super_admin' && (int) ($group['admin_id'] ?? 0) === $targetId) {
+                $targetSuper = true;
+            }
+            if ((int) ($group['admin_id'] ?? 0) === $actorId) {
+                $actorGroups[] = $id;
+            }
+            if ((int) ($group['admin_id'] ?? 0) === $targetId) {
+                $targetGroups[] = $id;
+            }
+        }
+        if ($targetSuper) {
+            return true;
+        }
+        $ancestors = [];
+        foreach ($actorGroups as $id) {
+            $guard = 0;
+            $parent = $parents[$id] ?? 0;
+            while ($parent > 0 && $guard < 20) {
+                $ancestors[$parent] = true;
+                $parent = $parents[$parent] ?? 0;
+                $guard++;
+            }
+        }
+        foreach ($targetGroups as $id) {
+            if (isset($ancestors[$id])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function getStaffOverview(): array
