@@ -64,6 +64,8 @@ class Admin extends \FOSSBilling\Api\AbstractApi
 
     public function settings(): array
     {
+        $this->checkPermissions('tajhost2fa', 'manage');
+
         return $this->getService()->getSettings();
     }
 
@@ -92,7 +94,7 @@ class Admin extends \FOSSBilling\Api\AbstractApi
     {
         $this->checkPermissions('tajhost2fa', 'manage');
 
-        return $this->getService()->resetFor(Service::TYPE_ADMIN, (int) $data['id']);
+        return $this->getService()->resetFor(Service::TYPE_ADMIN, (int) $data['id'], (int) $this->getIdentity()->id);
     }
 
     #[RequiredParams(['id' => 'Client ID required'])]
@@ -100,7 +102,7 @@ class Admin extends \FOSSBilling\Api\AbstractApi
     {
         $this->checkPermissions('tajhost2fa', 'manage');
 
-        return $this->getService()->resetFor(Service::TYPE_CLIENT, (int) $data['id']);
+        return $this->getService()->resetFor(Service::TYPE_CLIENT, (int) $data['id'], (int) $this->getIdentity()->id);
     }
 
     /**

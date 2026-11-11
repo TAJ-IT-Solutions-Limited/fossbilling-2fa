@@ -1,0 +1,11 @@
+{
+  "name": "tajhost/fossbilling-2fa",
+  "description": "TOTP two-factor authentication for FOSSBilling",
+  "license": "Apache-2.0",
+  "require": {
+    "php": ">=8.2"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^10.5"
+  }
+}

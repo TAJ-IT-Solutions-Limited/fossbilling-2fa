@@ -60,6 +60,8 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
                 'display_name' => __trans('Manage two-factor authentication'),
                 'description' => __trans('Allows the staff member to view 2FA status and reset 2FA for other staff members and clients.'),
             ],
+            // Empty so FOSSBilling 0.8.9 registers the settings page. A missing key is a 403.
+            'manage_settings' => [],
         ];
     }
 
@@ -144,6 +146,18 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
         return $name ? (string) $name : 'FOSSBilling';
     }
 
+    private function systemEmail(): ?string
+    {
+        try {
+            $email = $this->di['mod_service']('system')->getParamValue('company_email');
+        } catch (\Throwable) {
+            return null;
+        }
+        $email = trim((string) $email);
+
+        return str_contains($email, '@') ? $email : null;
+    }
+
     /* ------------------------------------------------------------------
      * Event hooks
      * ------------------------------------------------------------------ */
@@ -208,8 +222,13 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
             throw new InformationException('Enter the 6-digit code from your authenticator app, or one of your backup codes.', null, self::ERR_CODE_REQUIRED);
         }
 
-        if ($this->checkCode($record, $code)) {
-            return;
+        try {
+            if ($this->checkCode($record, $code)) {
+                return;
+            }
+        } catch (InformationException $error) {
+            $this->registerFailure($record);
+            throw $error;
         }
 
         $this->registerFailure($record);
@@ -260,6 +279,10 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
 
                 return true;
             }
+            $seen = Totp::matchedStep($secret, (string) $normalized, self::WINDOW, self::PERIOD, self::DIGITS);
+            if ($seen !== null && $seen <= (int) $record['last_step']) {
+                throw new InformationException('This code was already used. Wait for the next code.');
+            }
 
             return false;
         }
@@ -298,18 +321,52 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
 
     private function registerFailure(array $record): void
     {
+        $this->consumeIpLimit();
         $failed = (int) $record['failed_attempts'] + 1;
-        $lockedUntil = null;
-        if ($failed >= self::MAX_FAILED_ATTEMPTS) {
-            $lockedUntil = date('Y-m-d H:i:s', time() + self::LOCK_MINUTES * 60);
-            $failed = 0;
-            $this->di['logger']->warning(sprintf('2FA locked for %s #%d after too many invalid codes', $record['user_type'], $record['user_id']));
+        $minutes = $this->lockMinutes($failed);
+        $lockedUntil = $minutes > 0 ? date('Y-m-d H:i:s', time() + $minutes * 60) : null;
+        if ($minutes > 0) {
+            $this->di['logger']->warning(sprintf('2FA locked for %s #%d for %d minutes after %d invalid codes', $record['user_type'], $record['user_id'], $minutes, $failed));
         }
 
         $this->di['db']->exec(
             'UPDATE `' . self::TABLE . '` SET failed_attempts = :f, locked_until = :l, updated_at = :now WHERE id = :id',
             ['f' => $failed, 'l' => $lockedUntil, 'now' => $this->now(), 'id' => $record['id']]
         );
+    }
+
+    /** Five failures lock for 15 minutes, ten for 30, fifteen and above for 60. The counter stays. */
+    private function lockMinutes(int $failed): int
+    {
+        if ($failed >= 15) {
+            return 60;
+        }
+        if ($failed >= 10) {
+            return 30;
+        }
+        if ($failed >= self::MAX_FAILED_ATTEMPTS) {
+            return self::LOCK_MINUTES;
+        }
+
+        return 0;
+    }
+
+    /** Counts a failed code against the existing core api_login window for this IP. */
+    private function consumeIpLimit(): void
+    {
+        if (!isset($this->di['rate_limiter'])) {
+            return;
+        }
+        $ip = '0.0.0.0';
+        if (isset($this->di['request']) && is_object($this->di['request']) && method_exists($this->di['request'], 'getClientIp')) {
+            $ip = trim((string) $this->di['request']->getClientIp());
+        } elseif (!empty($_SERVER['REMOTE_ADDR']) && is_string($_SERVER['REMOTE_ADDR'])) {
+            $ip = $_SERVER['REMOTE_ADDR'];
+        }
+        if ($ip === '') {
+            $ip = '0.0.0.0';
+        }
+        $this->di['rate_limiter']->consumeOrThrow('api_login', $ip);
     }
 
     /* ------------------------------------------------------------------
@@ -374,6 +431,7 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
      */
     public function confirmSetup(string $type, int $userId, string $code): array
     {
+        $this->consumeIpLimit();
         $this->assertAvailable($type);
 
         $record = $this->getRecord($type, $userId);
@@ -386,8 +444,13 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
 
         $secret = $this->decryptSecret($record['pending_secret']);
         $code = (string) preg_replace('/\s+/', '', $code);
-        $step = $secret ? Totp::verify($secret, $code, 0, self::WINDOW, self::PERIOD, self::DIGITS) : null;
+        $step = $secret ? Totp::verify($secret, $code, (int) ($record['last_step'] ?? 0), self::WINDOW, self::PERIOD, self::DIGITS) : null;
         if ($step === null) {
+            $this->registerFailure($record);
+            $seen = $secret ? Totp::matchedStep($secret, $code, self::WINDOW, self::PERIOD, self::DIGITS) : null;
+            if ($seen !== null && $seen <= (int) ($record['last_step'] ?? 0)) {
+                throw new InformationException('This code was already used. Wait for the next code.');
+            }
             throw new InformationException('The code is not valid. Check that the time on your phone is correct and try again.');
         }
 
@@ -454,12 +517,114 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
     /**
      * Admin action: removes 2FA from an account (e.g. the user lost their phone).
      */
-    public function resetFor(string $type, int $userId): bool
+    public function resetFor(string $type, int $userId, ?int $actingAdminId = null): bool
     {
+        if (!in_array($type, [self::TYPE_ADMIN, self::TYPE_CLIENT], true) || $userId < 1) {
+            throw new InformationException('Unknown account.');
+        }
+        if ($type === self::TYPE_ADMIN && $actingAdminId !== null && $actingAdminId === $userId) {
+            throw new InformationException('You cannot reset your own two-factor authentication.');
+        }
+        if ($type === self::TYPE_ADMIN && $actingAdminId !== null && $this->adminOutranks($actingAdminId, $userId)) {
+            throw new InformationException('You cannot reset two-factor authentication for a higher-rank or super administrator.');
+        }
+
         $this->deleteRecord($type, $userId);
-        $this->di['logger']->warning(sprintf('2FA reset by staff for %s #%d', $type, $userId));
+        $this->di['logger']->warning(sprintf('2FA reset by admin #%d for %s #%d', (int) $actingAdminId, $type, $userId));
+        $this->emailReset($type, $userId);
 
         return true;
+    }
+
+    private function emailReset(string $type, int $userId): void
+    {
+        if (!isset($this->di['mod_service'])) {
+            return;
+        }
+        $table = $type === self::TYPE_ADMIN ? 'admin' : 'client';
+        $row = $this->di['db']->getRow('SELECT email FROM `' . $table . '` WHERE id = :id', ['id' => $userId]);
+        $to = is_array($row) ? trim((string) ($row['email'] ?? '')) : '';
+        if ($to === '' || !str_contains($to, '@')) {
+            return;
+        }
+        $from = $this->systemEmail();
+        if ($from === null) {
+            $this->di['logger']->warning('2FA reset email could not be sent');
+
+            return;
+        }
+        try {
+            // FOSSBilling 0.8.9 Email\Service::sendMail line 434. _queue line 667 casts $from to string,
+            // so null would queue an empty sender. company_email is the core company address.
+            $this->di['mod_service']('email')->sendMail(
+                $to,
+                $from,
+                'Two-factor authentication was reset',
+                'A staff member reset two-factor authentication on your account. Set it up again before the next sign-in. أعاد أحد الموظفين ضبط التحقق بخطوتين. أعد إعداده قبل تسجيل الدخول التالي.',
+                null,
+                null,
+                $type === self::TYPE_CLIENT ? $userId : null,
+                $type === self::TYPE_ADMIN ? $userId : null
+            );
+        } catch (\Throwable) {
+            $this->di['logger']->warning('2FA reset email could not be sent');
+        }
+    }
+
+    /**
+     * Dead on FOSSBilling 0.8.9. That core never fires onBeforeAdminApiCall.
+     * Existing sessions are sent to setup by the admin.theme.content.before widget
+     * while enforce_admin is on. 0.8.9 keeps admin sessions in PHP's session store,
+     * so one staff member cannot invalidate another staff member's session from here.
+     */
+    public static function onBeforeAdminApiCall(\Box_Event $event): void
+    {
+        $params = $event->getParameters();
+        $event->getDi()['mod_service']('tajhost2fa')->assertAdminApiAllowed(
+            (string) ($params['module'] ?? ''),
+            (string) ($params['method'] ?? '')
+        );
+    }
+
+    public function assertAdminApiAllowed(string $module, string $method): void
+    {
+        if ($this->isLoginCall($module, $method)) {
+            return;
+        }
+        if (!$this->getSettings()['enforce_admin']) {
+            return;
+        }
+        if (!isset($this->di['loggedin_admin'])) {
+            return;
+        }
+        $admin = $this->di['loggedin_admin'];
+        if (!is_object($admin) || !isset($admin->id)) {
+            return;
+        }
+        $allowed = [
+            'tajhost2fa' => ['status', 'setup_start', 'setup_confirm', 'disable', 'backup_codes_regenerate'],
+            'profile' => ['get', 'update', 'change_password', 'logout'],
+        ];
+        if (in_array($method, $allowed[$module] ?? [], true)) {
+            return;
+        }
+        $record = $this->getRecord(self::TYPE_ADMIN, (int) $admin->id);
+        if ($record && (int) $record['enabled'] === 1) {
+            return;
+        }
+
+        throw new InformationException('Set up two-factor authentication before using the admin API.');
+    }
+
+    private function isLoginCall(string $module, string $method): bool
+    {
+        $module = strtolower($module);
+        $method = strtolower($method);
+        if ($module === 'guest' || $method === 'login' || $method === 'staff_login' || $method === 'client_login') {
+            return true;
+        }
+
+        return false;
     }
 
     public function listEnabled(string $type): array
@@ -467,12 +632,81 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
         $table = $type === self::TYPE_ADMIN ? 'admin' : 'client';
         $nameSql = $type === self::TYPE_ADMIN ? 'u.name' : "CONCAT_WS(' ', u.first_name, u.last_name)";
 
-        return $this->di['db']->getAll(
+        $rows = $this->di['db']->getAll(
             'SELECT t.user_id AS id, u.email, ' . $nameSql . ' AS name, t.enabled_at, t.last_used_at, t.backup_codes
              FROM `' . self::TABLE . '` t JOIN `' . $table . '` u ON u.id = t.user_id
              WHERE t.user_type = :t AND t.enabled = 1 ORDER BY t.enabled_at DESC',
             ['t' => $type]
         );
+        foreach ($rows as $index => $row) {
+            $hashes = json_decode((string) ($row['backup_codes'] ?? ''), true);
+            $rows[$index]['backup_code_count'] = is_array($hashes) ? count($hashes) : 0;
+            unset($rows[$index]['backup_codes']);
+        }
+
+        return $rows;
+    }
+
+    private function adminOutranks(int $actorId, int $targetId): bool
+    {
+        if (!isset($this->di['db']) || !is_object($this->di['db']) || !method_exists($this->di['db'], 'getAll')) {
+            return false;
+        }
+        $groups = $this->di['db']->getAll(
+            'SELECT m.admin_id, g.id, g.system_name
+             FROM admin_group_member m
+             JOIN admin_group g ON g.id = m.admin_group_id
+             WHERE m.admin_id = :actor OR m.admin_id = :target',
+            ['actor' => $actorId, 'target' => $targetId]
+        );
+        $tree = $this->di['db']->getAll('SELECT id, parent_id FROM admin_group', []);
+        if (!is_array($groups)) {
+            return false;
+        }
+        $targetSuper = false;
+        $actorGroups = [];
+        $targetGroups = [];
+        $parents = [];
+        foreach (is_array($tree) ? $tree : [] as $node) {
+            if (is_array($node)) {
+                $parents[(int) ($node['id'] ?? 0)] = (int) ($node['parent_id'] ?? 0);
+            }
+        }
+        foreach ($groups as $group) {
+            if (!is_array($group)) {
+                continue;
+            }
+            $id = (int) ($group['id'] ?? 0);
+            if ((string) ($group['system_name'] ?? '') === 'super_admin' && (int) ($group['admin_id'] ?? 0) === $targetId) {
+                $targetSuper = true;
+            }
+            if ((int) ($group['admin_id'] ?? 0) === $actorId) {
+                $actorGroups[] = $id;
+            }
+            if ((int) ($group['admin_id'] ?? 0) === $targetId) {
+                $targetGroups[] = $id;
+            }
+        }
+        if ($targetSuper) {
+            return true;
+        }
+        $ancestors = [];
+        foreach ($actorGroups as $id) {
+            $guard = 0;
+            $parent = $parents[$id] ?? 0;
+            while ($parent > 0 && $guard < 20) {
+                $ancestors[$parent] = true;
+                $parent = $parents[$parent] ?? 0;
+                $guard++;
+            }
+        }
+        foreach ($targetGroups as $id) {
+            if (isset($ancestors[$id])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function getStaffOverview(): array
