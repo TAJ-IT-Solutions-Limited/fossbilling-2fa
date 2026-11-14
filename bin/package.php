@@ -102,21 +102,43 @@ function directory_assert_package(string $zipPath, array $files): void
         fwrite(STDERR, "package is wrapped or still uses src/\n");
         exit(1);
     }
+    directory_check_zip($zipPath);
+    directory_extract_check($zipPath, $files, 'zip');
 }
 
 function directory_zip_store(string $path, array $files): void
 {
     ksort($files);
+    $entries = [];
+    $dirs = [];
+    foreach (array_keys($files) as $name) {
+        $parts = explode('/', $name);
+        array_pop($parts);
+        $prefix = '';
+        foreach ($parts as $part) {
+            $prefix .= $part . '/';
+            $dirs[$prefix] = true;
+        }
+    }
+    foreach (array_keys($dirs) as $dir) {
+        $entries[$dir] = '';
+    }
+    foreach ($files as $name => $data) {
+        $entries[$name] = $data;
+    }
     $local = '';
     $central = '';
     $offset = 0;
     $count = 0;
     $dosDate = ((2026 - 1980) << 9) | (11 << 5) | 14;
     $dosTime = 12 << 11;
-    foreach ($files as $name => $data) {
+    $versionMade = (3 << 8) | 20;
+    foreach ($entries as $name => $data) {
+        $isDir = str_ends_with($name, '/');
         $crc = crc32($data);
         $size = strlen($data);
         $nameLen = strlen($name);
+        $external = $isDir ? ((040755 << 16) | 0x10) : (0100644 << 16);
         $header = pack(
             'VvvvvvVVVvv',
             0x04034b50,
@@ -135,7 +157,7 @@ function directory_zip_store(string $path, array $files): void
         $central .= pack(
             'VvvvvvvVVVvvvvvVV',
             0x02014b50,
-            20,
+            $versionMade,
             20,
             0x0800,
             0,
@@ -149,7 +171,7 @@ function directory_zip_store(string $path, array $files): void
             0,
             0,
             0,
-            0,
+            $external,
             $offset
         ) . $name;
         $offset += strlen($header) + $nameLen + $size;
@@ -159,5 +181,97 @@ function directory_zip_store(string $path, array $files): void
     if (file_put_contents($path, $local . $central . $end) === false) {
         fwrite(STDERR, "cannot write $path\n");
         exit(1);
+    }
+}
+
+function directory_check_zip(string $path): void
+{
+    $data = (string) file_get_contents($path);
+    if (substr($data, -22, 4) !== "PK\x05\x06") {
+        fwrite(STDERR, "zip end record is missing\n");
+        exit(1);
+    }
+    $count = unpack('v', substr($data, -12, 2))[1];
+    $offset = unpack('V', substr($data, -6, 4))[1];
+    for ($i = 0; $i < $count; $i++) {
+        if (substr($data, $offset, 4) !== "PK\x01\x02") {
+            fwrite(STDERR, "zip central directory is damaged\n");
+            exit(1);
+        }
+        $nameLen = unpack('v', substr($data, $offset + 28, 2))[1];
+        $extraLen = unpack('v', substr($data, $offset + 30, 2))[1];
+        $commentLen = unpack('v', substr($data, $offset + 32, 2))[1];
+        $external = unpack('V', substr($data, $offset + 38, 4))[1];
+        $name = substr($data, $offset + 46, $nameLen);
+        $isDir = str_ends_with($name, '/');
+        $expect = $isDir ? ((040755 << 16) | 0x10) : (0100644 << 16);
+        if ($external !== $expect) {
+            fwrite(STDERR, "zip mode for $name is " . dechex($external) . "\n");
+            exit(1);
+        }
+        $offset += 46 + $nameLen + $extraLen + $commentLen;
+    }
+}
+
+function directory_extract_check(string $archive, array $files, string $kind): void
+{
+    if (PHP_OS_FAMILY === 'Windows') {
+        return;
+    }
+    $uid = trim((string) shell_exec('id -u'));
+    if ($uid === '' || $uid === '0') {
+        fwrite(STDERR, "extract check must run as a normal user\n");
+        exit(1);
+    }
+    $tmp = sys_get_temp_dir() . '/pkg-' . bin2hex(random_bytes(4));
+    if (!mkdir($tmp, 0700) && !is_dir($tmp)) {
+        fwrite(STDERR, "cannot create extract dir\n");
+        exit(1);
+    }
+    $command = $kind === 'tar'
+        ? 'tar -xf ' . escapeshellarg($archive) . ' -C ' . escapeshellarg($tmp)
+        : 'unzip -q ' . escapeshellarg($archive) . ' -d ' . escapeshellarg($tmp);
+    exec($command, $output, $code);
+    if ($code !== 0) {
+        fwrite(STDERR, "extract failed\n");
+        exit(1);
+    }
+    $found = [];
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($tmp, FilesystemIterator::SKIP_DOTS)
+    );
+    foreach ($iterator as $file) {
+        $rel = substr($file->getPathname(), strlen($tmp) + 1);
+        $rel = str_replace('\\', '/', $rel);
+        $mode = fileperms($file->getPathname()) & 0777;
+        if ($file->isDir()) {
+            if ($mode !== 0755) {
+                fwrite(STDERR, "extracted directory $rel is " . decoct($mode) . "\n");
+                exit(1);
+            }
+            continue;
+        }
+        if ($mode !== 0644) {
+            fwrite(STDERR, "extracted file $rel is " . decoct($mode) . "\n");
+            exit(1);
+        }
+        $body = file_get_contents($file->getPathname());
+        if ($body === false) {
+            fwrite(STDERR, "cannot read $rel\n");
+            exit(1);
+        }
+        $found[$rel] = $body;
+    }
+    ksort($files);
+    ksort($found);
+    if (array_keys($found) !== array_keys($files)) {
+        fwrite(STDERR, "extracted file list does not match\n");
+        exit(1);
+    }
+    foreach ($files as $name => $data) {
+        if ($found[$name] !== $data) {
+            fwrite(STDERR, "extracted bytes differ for $name\n");
+            exit(1);
+        }
     }
 }
