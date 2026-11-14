@@ -13,16 +13,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+
       - name: Lint PHP
-        run: find src -name '*.php' -print0 | xargs -0 -n1 php -l
+        run: find src bin -name '*.php' -print0 | xargs -0 -n1 php -l
 
       - name: Build archive
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          cp LICENSE README.md src/
-          (cd src && zip -r "../tajhost2fa-${VERSION}.zip" . -x assets/icon.svg)
+        run: php bin/package.php
 
       - name: Upload archive to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$GITHUB_REF_NAME" tajhost2fa-*.zip --clobber
+        run: gh release upload "$GITHUB_REF_NAME" dist/tajhost2fa-*.zip --clobber

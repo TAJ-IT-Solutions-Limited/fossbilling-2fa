@@ -26,7 +26,7 @@ Built and maintained by [TAJHOST](https://tajhost.com), the web hosting and IT s
 
 - FOSSBilling **0.8.x only, not 2.x yet.** The minimum is **0.8.3** because the login field uses the widget system. The extension directory does not accept a maximum version, so the ceiling is this document, not `manifest.json`.
 - PHP 8.2 or newer.
-- This package does not ship an icon. The grey file under `src/assets/` is a placeholder for a later directory release and is left out of the release archive.
+- The directory package includes `icon.svg` at the module root: a shield, a lock, and six bars, in gold `#B8902C` on dark. The grey file under `src/assets/` stays out of the archive.
 
 ## Installation
 
@@ -38,8 +38,8 @@ Built and maintained by [TAJHOST](https://tajhost.com), the web hosting and IT s
 
 ### Manually
 
-1. Download the latest `tajhost2fa-x.y.z.zip` from the [Releases](../../releases) page.
-2. Extract it to `modules/Tajhost2fa/` in your FOSSBilling installation. `manifest.json` must end up at `modules/Tajhost2fa/manifest.json`.
+1. Build `dist/tajhost2fa-<version>.zip` with `php bin/package.php`, or use that archive from a future release. The archive has no wrapping folder and no `src/` prefix. It stays under 5 MiB.
+2. Extract it to `modules/Tajhost2fa/` in your FOSSBilling installation. `manifest.json` and `icon.svg` must end up at `modules/Tajhost2fa/manifest.json` and `modules/Tajhost2fa/icon.svg`.
 3. In the admin panel, go to **Extensions → Tajhost2fa → Activate**.
 
 After activation, every staff member is asked to set up 2FA on their next page load. Set up your own account first.

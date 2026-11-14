@@ -9,7 +9,8 @@
 - Keep the failed-attempt counter when locking. Escalate the lock from 15 to 30 to 60 minutes, and count failed codes on the existing per-IP `api_login` limit.
 - Add `assertAdminApiAllowed` for a before-admin-API event. FOSSBilling 0.8.9 does not fire that event.
 - State that this release is for FOSSBilling 0.8.x and not 2.x.
-- Point `icon_url` at a placeholder `assets/icon.svg`. The release archive excludes that file. The README does not claim an icon ships.
+- Ship `icon.svg` at the module root and point `icon_url` at it. The grey `assets/icon.svg` placeholder stays out of the archive.
+- `php bin/package.php` builds `tajhost2fa-<version>.zip` with the module files at the archive root and no wrapping folder.
 
 ## 1.0.0
 

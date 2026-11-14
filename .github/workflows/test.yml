@@ -17,6 +17,8 @@ jobs:
         with:
           php-version: ${{ matrix.php }}
           coverage: none
-      - run: find src -name '*.php' -print0 | xargs -0 -n1 php -l
+      - run: find src bin -name '*.php' -print0 | xargs -0 -n1 php -l
+      - name: Build the directory package
+        run: php bin/package.php
       - run: composer update --no-interaction --prefer-dist
       - run: vendor/bin/phpunit
