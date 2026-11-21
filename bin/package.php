@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require __DIR__ . '/directory_manifest.php';
+
 $root = dirname(__DIR__);
 $manifestPath = $root . '/src/manifest.json';
 $manifest = json_decode((string) file_get_contents($manifestPath), true, 512, JSON_THROW_ON_ERROR);
@@ -30,6 +32,7 @@ foreach ($iterator as $file) {
 foreach (['LICENSE' => $root . '/LICENSE', 'README.md' => $root . '/README.md'] as $name => $source) {
     $files[$name] = directory_lf((string) file_get_contents($source));
 }
+$files['manifest.json'] = directory_lf(directory_manifest_encode(directory_manifest_from_repo($manifest)));
 
 $outDir = $root . '/dist';
 if (!is_dir($outDir) && !mkdir($outDir) && !is_dir($outDir)) {
@@ -42,6 +45,10 @@ if (is_file($zipPath)) {
 }
 directory_zip_store($zipPath, $files);
 directory_assert_package($zipPath, $files);
+if (directory_zip_root_manifest($zipPath) !== $files['manifest.json']) {
+    fwrite(STDERR, "zip root manifest does not match the directory schema copy\n");
+    exit(1);
+}
 
 echo $zipPath . PHP_EOL;
 echo 'sha256 ' . hash_file('sha256', $zipPath) . PHP_EOL;
@@ -86,8 +93,12 @@ function directory_assert_package(string $zipPath, array $files): void
         fwrite(STDERR, "icon is missing the TAJHOST gold\n");
         exit(1);
     }
-    if (($files['manifest.json'] ?? '') === '' || !str_contains($files['manifest.json'], '"icon_url": "icon.svg"')) {
-        fwrite(STDERR, "manifest does not point at icon.svg\n");
+    if (($files['manifest.json'] ?? '') === '' || !str_contains($files['manifest.json'], '"type": "module"')) {
+        fwrite(STDERR, "manifest is not a directory module manifest\n");
+        exit(1);
+    }
+    if (str_contains($files['manifest.json'], 'icon_url') || str_contains($files['manifest.json'], 'minimum_fossbilling_version')) {
+        fwrite(STDERR, "manifest still has a field the directory schema rejects\n");
         exit(1);
     }
     $top = [];
