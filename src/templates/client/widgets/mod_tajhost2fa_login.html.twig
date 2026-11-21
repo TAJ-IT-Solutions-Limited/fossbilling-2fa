@@ -1,4 +1,5 @@
 {# TAJHOST 2FA: adds the verification code field to the client login form. #}
+<button type="button" class="btn btn-link px-0 mb-3" id="tajhost2fa-show" data-en="{{ 'I have a 2FA code'|trans }}" data-ar="{{ 'لدي رمز تحقق'|trans }}">{{ 'I have a 2FA code'|trans }}</button>
 <div id="tajhost2fa-login" class="mb-3" style="display:none">
     <label class="form-label" for="tajhost2fa_code">{{ 'Two-factor authentication code'|trans }}</label>
     <input class="form-control" id="tajhost2fa_code" type="text" name="tajhost2fa_code"
@@ -11,10 +12,18 @@
     var ACTION = 'client/login';
     function init() {
         var box = document.getElementById('tajhost2fa-login');
+        var show = document.getElementById('tajhost2fa-show');
         var form = document.querySelector('form[action*="' + ACTION + '"]');
         if (!box || !form) { return; }
         var footer = form.querySelector('.form-footer') || form.querySelector('button[type="submit"]');
-        form.insertBefore(box, footer && footer.parentNode === form ? footer : null);
+        var before = footer && footer.parentNode === form ? footer : null;
+        if (show) {
+            var lang = (document.documentElement.lang || '').toLowerCase();
+            if (lang.indexOf('ar') === 0) { show.textContent = show.getAttribute('data-ar'); }
+            form.insertBefore(show, before);
+            show.addEventListener('click', function () { reveal(); });
+        }
+        form.insertBefore(box, before);
 
         var input = document.getElementById('tajhost2fa_code');
         function reveal() {
@@ -26,12 +35,12 @@
         if (ui && typeof ui.notify === 'function' && !ui.__tajhost2fa) {
             var original = ui.notify.bind(ui);
             ui.notify = function (message, type) {
-                var m = typeof message === 'string' ? message.match(/\((200[123])\)\s*$/) : null;
-                if (m) {
-                    reveal();
-                    if (m[1] === '2001') { return; } // just show the field, no error toast
-                    return original(message.replace(/\s*\(200[123]\)\s*$/, ''), type);
-                }
+                var text = typeof message === 'string' ? message : '';
+                var m = text.match(/\((200[123])\)\s*$/);
+                var isError = type === 'error' || type === 'danger' || !!m;
+                if (isError) { reveal(); }
+                if (m && m[1] === '2001') { return; }
+                if (m) { return original(text.replace(/\s*\(200[123]\)\s*$/, ''), type); }
                 return original(message, type);
             };
             ui.__tajhost2fa = true;

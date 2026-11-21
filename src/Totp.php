@@ -49,8 +49,9 @@ final class Totp
     /**
      * Verifies a code within +/- $window steps.
      *
-     * Returns the matched time step, or null when the code is invalid or was
-     * already used (step <= $lastStep, replay protection).
+     * Returns the matched time step, or null when the code is invalid or already used.
+     * A step at or before $lastStep is rejected. A code in the accepted window is
+     * never old enough for a timed exception, so replay stays strict.
      */
     public static function verify(string $secret, string $code, int $lastStep = 0, int $window = 1, int $period = 30, int $digits = 6, ?int $time = null): ?int
     {
@@ -69,6 +70,14 @@ final class Totp
         }
 
         return $matched;
+    }
+
+    /**
+     * The matching step inside the window, including one that replay protection rejects.
+     */
+    public static function matchedStep(string $secret, string $code, int $window = 1, int $period = 30, int $digits = 6, ?int $time = null): ?int
+    {
+        return self::verify($secret, $code, -1, $window, $period, $digits, $time);
     }
 
     public static function provisioningUri(string $secret, string $account, string $issuer, int $digits = 6, int $period = 30): string
