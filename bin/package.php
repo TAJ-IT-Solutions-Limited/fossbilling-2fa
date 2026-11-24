@@ -29,6 +29,7 @@ foreach ($iterator as $file) {
     }
     $files[$name] = directory_lf((string) file_get_contents($file->getPathname()));
 }
+$moduleFiles = $files;
 foreach (['LICENSE' => $root . '/LICENSE', 'README.md' => $root . '/README.md'] as $name => $source) {
     $files[$name] = directory_lf((string) file_get_contents($source));
 }
@@ -50,8 +51,17 @@ if (directory_zip_root_manifest($zipPath) !== $files['manifest.json']) {
     exit(1);
 }
 
+$tarPath = $outDir . '/tajhost2fa-' . $version . '.tar';
+if (is_file($tarPath)) {
+    unlink($tarPath);
+}
+directory_tar($tarPath, $moduleFiles);
+directory_assert_tar($tarPath, $moduleFiles);
+
 echo $zipPath . PHP_EOL;
 echo 'sha256 ' . hash_file('sha256', $zipPath) . PHP_EOL;
+echo $tarPath . PHP_EOL;
+echo 'sha256 ' . hash_file('sha256', $tarPath) . PHP_EOL;
 foreach (array_keys($files) as $name) {
     echo $name . PHP_EOL;
 }
@@ -284,5 +294,119 @@ function directory_extract_check(string $archive, array $files, string $kind): v
             fwrite(STDERR, "extracted bytes differ for $name\n");
             exit(1);
         }
+    }
+}
+
+function directory_assert_tar(string $tarPath, array $files): void
+{
+    $size = filesize($tarPath);
+    if ($size === false || $size >= 5 * 1024 * 1024) {
+        fwrite(STDERR, "tar is missing or is 5 MiB or larger\n");
+        exit(1);
+    }
+    foreach (['manifest.json', 'Service.php', 'icon.svg'] as $name) {
+        if (!isset($files[$name])) {
+            fwrite(STDERR, "tar is missing $name\n");
+            exit(1);
+        }
+    }
+    if (!str_contains($files['manifest.json'], '"minimum_fossbilling_version"')) {
+        fwrite(STDERR, "tar manifest is not the module manifest\n");
+        exit(1);
+    }
+    directory_assert_tar_modes($tarPath);
+    directory_extract_check($tarPath, $files, 'tar');
+}
+
+function directory_tar(string $path, array $files): void
+{
+    ksort($files);
+    $out = '';
+    $dirs = [];
+    foreach (array_keys($files) as $name) {
+        $parts = explode('/', $name);
+        array_pop($parts);
+        $prefix = '';
+        foreach ($parts as $part) {
+            $prefix .= $part . '/';
+            $dirs[$prefix] = true;
+        }
+    }
+    $names = array_keys($dirs);
+    sort($names);
+    foreach ($names as $dir) {
+        $out .= directory_tar_header($dir, '', '5');
+    }
+    foreach ($files as $name => $data) {
+        $out .= directory_tar_header($name, $data, '0') . $data;
+        $pad = (512 - (strlen($data) % 512)) % 512;
+        $out .= str_repeat("\0", $pad);
+    }
+    $out .= str_repeat("\0", 1024);
+    if (file_put_contents($path, $out) === false) {
+        fwrite(STDERR, "cannot write $path\n");
+        exit(1);
+    }
+}
+
+function directory_tar_header(string $name, string $data, string $type): string
+{
+    $header = str_repeat("\0", 512);
+    directory_tar_put($header, 0, $name);
+    $mode = $type === '5' ? 0755 : 0644;
+    directory_tar_put($header, 100, sprintf('%07o', $mode) . "\0");
+    directory_tar_put($header, 108, sprintf('%07o', 0) . "\0");
+    directory_tar_put($header, 116, sprintf('%07o', 0) . "\0");
+    directory_tar_put($header, 124, sprintf('%011o', strlen($data)) . "\0");
+    directory_tar_put($header, 136, sprintf('%011o', 1763131200) . "\0");
+    directory_tar_put($header, 148, "        ");
+    $header[156] = $type;
+    directory_tar_put($header, 257, "ustar\0");
+    directory_tar_put($header, 263, '00');
+    $sum = 0;
+    for ($i = 0; $i < 512; $i++) {
+        $sum += ord($header[$i]);
+    }
+    directory_tar_put($header, 148, sprintf('%06o', $sum) . "\0 ");
+
+    return $header;
+}
+
+function directory_tar_put(string &$header, int $offset, string $value): void
+{
+    $length = strlen($value);
+    for ($i = 0; $i < $length; $i++) {
+        $header[$offset + $i] = $value[$i];
+    }
+}
+
+function directory_assert_tar_modes(string $path): void
+{
+    $data = (string) file_get_contents($path);
+    $offset = 0;
+    $length = strlen($data);
+    $seen = 0;
+    while ($offset + 512 <= $length) {
+        $header = substr($data, $offset, 512);
+        if ($header === str_repeat("\0", 512)) {
+            break;
+        }
+        $name = rtrim(substr($header, 0, 100), "\0");
+        $mode = octdec(trim(substr($header, 100, 8)));
+        $uid = octdec(trim(substr($header, 108, 8)));
+        $gid = octdec(trim(substr($header, 116, 8)));
+        $size = octdec(trim(substr($header, 124, 12)));
+        $type = $header[156];
+        $expect = $type === '5' ? 0755 : 0644;
+        if ($uid !== 0 || $gid !== 0 || $mode !== $expect) {
+            fwrite(STDERR, "tar mode for $name is " . decoct($mode) . " uid $uid gid $gid\n");
+            exit(1);
+        }
+        $seen++;
+        $offset += 512 + (int) (ceil($size / 512) * 512);
+    }
+    if ($seen === 0) {
+        fwrite(STDERR, "tar has no entries\n");
+        exit(1);
     }
 }

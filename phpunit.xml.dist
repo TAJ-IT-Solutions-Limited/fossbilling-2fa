@@ -4,6 +4,7 @@
     <testsuite name="tajhost2fa">
       <file>tests/TotpTest.php</file>
       <file>tests/ServiceTest.php</file>
+      <file>tests/LoginWidgetTest.php</file>
     </testsuite>
   </testsuites>
 </phpunit>

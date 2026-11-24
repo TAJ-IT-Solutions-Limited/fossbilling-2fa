@@ -49,7 +49,7 @@ After activation, every staff member is asked to set up 2FA on their next page l
 1. The user enters email and password as usual.
 2. FOSSBilling verifies the password and fires `onAfterAdminLogin` or `onAfterClientLogin`, before it creates the session.
 3. If the account has 2FA enabled, the module checks the `tajhost2fa_code` field. If the field is missing, it aborts the login with error `2001`.
-4. The login form starts with the code field hidden. It opens on any login error, and an **I have a 2FA code** link is always visible, so a change in the error text cannot hide the field. Error `2001` still opens the field without an error toast.
+4. The login form starts with the code field hidden. It opens only when the module returns `2001`, `2002`, or `2003`, then focuses the field. Any other error, including a wrong password, leaves the field hidden and shows the normal message. Error `2001` opens the field without an error toast.
 5. If the code is wrong, the login is aborted with error `2002`. After too many attempts it returns `2003` (locked).
 
 Because the check runs **after** the password check, the login form never reveals whether an account has 2FA enabled to someone who doesn't know the password.
