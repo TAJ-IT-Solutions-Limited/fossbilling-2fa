@@ -41,6 +41,20 @@ final class ServiceTest extends TestCase
 
         $this->assertTrue($service->checkCode($record, $code));
         $this->assertSame($step, $db->execs[0][1]['step']);
+        $this->assertStringContainsString('last_step < :step', $db->execs[0][0]);
+    }
+
+    public function testTheSameCodeCannotBeAcceptedTwice(): void
+    {
+        $now = time();
+        $step = intdiv($now, 30);
+        $code = Totp::codeAt(self::SECRET, $step);
+        [$service, $db] = $this->pair();
+        $db->affectedQueue = [1, 0];
+        $record = $this->record($step - 2, date('Y-m-d H:i:s', $now - 120));
+
+        $this->assertTrue($service->checkCode($record, $code));
+        $this->assertFalse($service->checkCode($record, $code));
     }
 
     public function testReplayedCodeDoesNotAdvanceTheLock(): void
@@ -246,9 +260,19 @@ final class FakeDb
     public array $execs = [];
     public mixed $row = null;
 
-    public function exec(string $sql, array $params = []): void
+    public int $affected = 1;
+
+    /** @var list<int> */
+    public array $affectedQueue = [];
+
+    public function exec(string $sql, array $params = []): int
     {
         $this->execs[] = [$sql, $params];
+        if ($this->affectedQueue !== []) {
+            return array_shift($this->affectedQueue);
+        }
+
+        return $this->affected;
     }
 
     public function getRow(string $sql, array $params = []): mixed

@@ -272,12 +272,12 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
         if (preg_match('/^\d{' . self::DIGITS . '}$/', (string) $normalized)) {
             $step = Totp::verify($secret, (string) $normalized, (int) $record['last_step'], self::WINDOW, self::PERIOD, self::DIGITS);
             if ($step !== null) {
-                $this->di['db']->exec(
-                    'UPDATE `' . self::TABLE . '` SET last_step = :step, failed_attempts = 0, locked_until = NULL, last_used_at = :now, updated_at = :now WHERE id = :id',
+                $changed = (int) $this->di['db']->exec(
+                    'UPDATE `' . self::TABLE . '` SET last_step = :step, failed_attempts = 0, locked_until = NULL, last_used_at = :now, updated_at = :now WHERE id = :id AND (last_step IS NULL OR last_step < :step)',
                     ['step' => $step, 'now' => $this->now(), 'id' => $record['id']]
                 );
 
-                return true;
+                return $changed === 1;
             }
             $seen = Totp::matchedStep($secret, (string) $normalized, self::WINDOW, self::PERIOD, self::DIGITS);
             if ($seen !== null && $seen <= (int) $record['last_step']) {
@@ -297,10 +297,18 @@ class Service implements InjectionAwareInterface, WidgetProviderInterface
         foreach ($hashes as $i => $hash) {
             if (password_verify($backup, (string) $hash)) {
                 unset($hashes[$i]);
-                $this->di['db']->exec(
-                    'UPDATE `' . self::TABLE . '` SET backup_codes = :codes, failed_attempts = 0, locked_until = NULL, last_used_at = :now, updated_at = :now WHERE id = :id',
-                    ['codes' => json_encode(array_values($hashes)), 'now' => $this->now(), 'id' => $record['id']]
+                $changed = (int) $this->di['db']->exec(
+                    'UPDATE `' . self::TABLE . '` SET backup_codes = :codes, failed_attempts = 0, locked_until = NULL, last_used_at = :now, updated_at = :now WHERE id = :id AND backup_codes = :previous',
+                    [
+                        'codes' => json_encode(array_values($hashes)),
+                        'previous' => (string) $record['backup_codes'],
+                        'now' => $this->now(),
+                        'id' => $record['id'],
+                    ]
                 );
+                if ($changed !== 1) {
+                    return false;
+                }
                 $this->di['logger']->info(sprintf('2FA backup code used by %s #%d (%d remaining)', $record['user_type'], $record['user_id'], count($hashes)));
 
                 return true;
